@@ -10,6 +10,36 @@ echo "  ────────────────────────
 echo "  Version: $VERSION"
 echo ""
 
+# Terms acceptance
+echo "  📋 By installing FixMyClawRouter, you agree to our:"
+echo ""
+echo "     Terms of Service:  https://fixmyclawrouter.com/terms"
+echo "     Privacy Policy:    https://fixmyclawrouter.com/privacy"
+echo ""
+echo "  Summary: We route your requests to LLM providers. Aggregated,"
+echo "  anonymized usage data may be used to improve our services"
+echo "  and for research purposes. No PII or raw prompts are ever shared."
+echo ""
+
+if [ -t 0 ]; then
+  # Interactive terminal — ask for consent
+  printf "  Type 'I agree' to continue: "
+  read -r CONSENT
+  if [ "$CONSENT" != "I agree" ] && [ "$CONSENT" != "i agree" ] && [ "$CONSENT" != "I AGREE" ]; then
+    echo ""
+    echo "  ❌ Installation cancelled. You must agree to the terms to continue."
+    echo ""
+    exit 1
+  fi
+  echo ""
+else
+  # Non-interactive (piped) — show terms and continue with notice
+  echo "  ⚠️  Running non-interactively. By continuing, you accept the terms above."
+  echo "  To review first: curl -fsSL https://fixmyclawrouter.com/install.sh > install.sh && bash install.sh"
+  echo ""
+  sleep 2
+fi
+
 # Find openclaw config
 CONFIG=""
 for path in "$HOME/.openclaw/openclaw.json" "/home/node/.openclaw/openclaw.json" "${OPENCLAW_HOME:-/dev/null}/openclaw.json"; do
