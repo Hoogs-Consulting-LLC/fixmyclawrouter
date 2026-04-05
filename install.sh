@@ -97,6 +97,9 @@ update_config() {
   if command -v jq &>/dev/null; then
     TMPFILE=$(mktemp)
     jq --arg url "$url" --arg key "$key" '
+      # Set mode to replace so only our provider is used
+      .models.mode = "replace" |
+      # Keep existing providers but add ours
       .models.providers["smart-proxy"] = {
         "baseUrl": $url,
         "apiKey": $key,
@@ -105,7 +108,10 @@ update_config() {
           {"id": "auto", "name": "Smart Router (auto)", "reasoning": true, "input": ["text"], "maxTokens": 128000}
         ]
       } |
-      .agents.defaults.model.primary = "smart-proxy/auto"
+      # Set as primary model
+      .agents.defaults.model.primary = "smart-proxy/auto" |
+      # Clear fallbacks so it doesnt revert to old models
+      .agents.defaults.model.fallbacks = ["smart-proxy/auto"]
     ' "$CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$CONFIG"
     return 0
   fi
@@ -114,11 +120,13 @@ update_config() {
     python3 -c "
 import json, sys
 with open('$CONFIG') as f: cfg = json.load(f)
-cfg.setdefault('models', {}).setdefault('providers', {})['smart-proxy'] = {
+cfg.setdefault('models', {})['mode'] = 'replace'
+cfg['models'].setdefault('providers', {})['smart-proxy'] = {
   'baseUrl': '$url', 'apiKey': '$key', 'api': 'openai-completions',
   'models': [{'id': 'auto', 'name': 'Smart Router (auto)', 'reasoning': True, 'input': ['text'], 'maxTokens': 128000}]
 }
 cfg.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'smart-proxy/auto'
+cfg['agents']['defaults']['model']['fallbacks'] = ['smart-proxy/auto']
 with open('$CONFIG', 'w') as f: json.dump(cfg, f, indent=2)
 " && return 0
   fi
@@ -128,6 +136,7 @@ with open('$CONFIG', 'w') as f: json.dump(cfg, f, indent=2)
 const fs = require('fs');
 const cfg = JSON.parse(fs.readFileSync('$CONFIG', 'utf8'));
 if (!cfg.models) cfg.models = {};
+cfg.models.mode = 'replace';
 if (!cfg.models.providers) cfg.models.providers = {};
 cfg.models.providers['smart-proxy'] = {
   baseUrl: '$url', apiKey: '$key', api: 'openai-completions',
@@ -137,6 +146,7 @@ if (!cfg.agents) cfg.agents = {};
 if (!cfg.agents.defaults) cfg.agents.defaults = {};
 if (!cfg.agents.defaults.model) cfg.agents.defaults.model = {};
 cfg.agents.defaults.model.primary = 'smart-proxy/auto';
+cfg.agents.defaults.model.fallbacks = ['smart-proxy/auto'];
 fs.writeFileSync('$CONFIG', JSON.stringify(cfg, null, 2));
 " && return 0
   fi
@@ -187,6 +197,17 @@ fs.writeFileSync('$INSTALL_DIR/state.json', JSON.stringify(s, null, 2));
 update_state
 
 echo ""
+# Restart OpenClaw to pick up config changes
+echo "  🔄 Restarting OpenClaw..."
+if command -v openclaw &>/dev/null; then
+  openclaw gateway restart 2>/dev/null && echo "  ✅ OpenClaw restarted!" || echo "  ⚠️  Could not restart OpenClaw. Please restart manually: openclaw gateway restart"
+elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
+  docker restart openclaw 2>/dev/null && echo "  ✅ OpenClaw container restarted!" || echo "  ⚠️  Could not restart container. Please restart manually."
+else
+  echo "  ⚠️  Please restart OpenClaw to apply changes: openclaw gateway restart"
+fi
+echo ""
+
 echo "  ╔══════════════════════════════════════════════════╗"
 echo "  ║  ✅ FixMyClawRouter installed!                   ║"
 echo "  ║                                                  ║"
