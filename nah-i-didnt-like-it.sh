@@ -65,17 +65,6 @@ if [ ! -f "$BACKUP" ]; then
   exit 1
 fi
 
-# Stop OpenClaw before editing config
-echo "  🛑 Stopping OpenClaw..."
-if command -v openclaw &>/dev/null; then
-  openclaw gateway stop 2>/dev/null && echo "  ✅ OpenClaw stopped." || echo "  ⚠️  Could not stop OpenClaw (may not be running)."
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
-  docker stop openclaw 2>/dev/null && echo "  ✅ OpenClaw container stopped." || echo "  ⚠️  Could not stop container."
-else
-  echo "  ℹ️  OpenClaw not detected as running."
-fi
-echo ""
-
 # Check if config has been modified since we installed
 CURRENT_HASH=$(sha256sum "$CONFIG" 2>/dev/null || shasum -a 256 "$CONFIG" 2>/dev/null || echo "unknown")
 CURRENT_HASH=$(echo "$CURRENT_HASH" | awk '{print $1}')
@@ -85,11 +74,7 @@ surgical_remove() {
   if command -v jq &>/dev/null; then
     TMPFILE=$(mktemp)
     jq 'del(.models.providers["smart-proxy"])' "$CONFIG" > "$TMPFILE"
-    # Restore old default model from backup
-    OLD_DEFAULT=""
-    if command -v jq &>/dev/null; then
-      OLD_DEFAULT=$(jq -r '.agents.defaults.model.primary // empty' "$BACKUP" 2>/dev/null || echo "")
-    fi
+    OLD_DEFAULT=$(jq -r '.agents.defaults.model.primary // empty' "$BACKUP" 2>/dev/null || echo "")
     if [ -n "$OLD_DEFAULT" ]; then
       jq --arg m "$OLD_DEFAULT" '.agents.defaults.model.primary = $m' "$TMPFILE" > "${TMPFILE}.2" && mv "${TMPFILE}.2" "$TMPFILE"
       echo "  Restored default model: $OLD_DEFAULT"
@@ -103,7 +88,6 @@ surgical_remove() {
 import json
 with open('$CONFIG') as f: cfg = json.load(f)
 cfg.get('models', {}).get('providers', {}).pop('smart-proxy', None)
-# Try to restore old default from backup
 try:
     with open('$BACKUP') as f: bak = json.load(f)
     old = bak.get('agents', {}).get('defaults', {}).get('model', {}).get('primary', '')
@@ -176,17 +160,7 @@ fi
 # Clean up state
 rm -rf "$(dirname "$STATE")"
 
-# Start OpenClaw with restored config
-echo ""
-echo "  🔄 Starting OpenClaw..."
-if command -v openclaw &>/dev/null; then
-  openclaw gateway start 2>/dev/null && echo "  ✅ OpenClaw started!" || echo "  ⚠️  Could not start OpenClaw. Please start manually: openclaw gateway start"
-elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
-  docker start openclaw 2>/dev/null && echo "  ✅ OpenClaw container started!" || echo "  ⚠️  Could not start container. Please start manually."
-else
-  echo "  ⚠️  Please start OpenClaw to apply changes: openclaw gateway start"
-fi
-
+# Print summary BEFORE bouncing (may kill our shell session)
 echo ""
 echo "  ────────────────────────────────────────────────────"
 echo ""
@@ -201,3 +175,9 @@ echo "  No hard feelings. Seriously. 🤝"
 echo ""
 echo "  ────────────────────────────────────────────────────"
 echo ""
+echo "  🔄 Bouncing OpenClaw gateway to load restored config..."
+echo "     (your shell session may disconnect — that's normal)"
+echo ""
+
+# Bounce gateway: stop saves state, SIGHUP tells the process to reload.
+(openclaw gateway stop 2>/dev/null || true; sleep 1; PIDS=$(pgrep -f "node.*gateway" 2>/dev/null || echo ""); [ -n "$PIDS" ] && kill -HUP $PIDS 2>/dev/null; true) &

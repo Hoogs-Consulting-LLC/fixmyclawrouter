@@ -22,7 +22,6 @@ echo "  and for research purposes. No PII or raw prompts are ever shared."
 echo ""
 
 if [ -t 0 ]; then
-  # Interactive terminal — ask for consent
   printf "  Type 'I agree' to continue: "
   read -r CONSENT
   if [ "$CONSENT" != "I agree" ] && [ "$CONSENT" != "i agree" ] && [ "$CONSENT" != "I AGREE" ]; then
@@ -33,7 +32,6 @@ if [ -t 0 ]; then
   fi
   echo ""
 else
-  # Non-interactive (piped) — show terms and continue with notice
   echo "  ⚠️  Running non-interactively. By continuing, you accept the terms above."
   echo "  To review first: curl -fsSL https://fixmyclawrouter.com/install.sh > install.sh && bash install.sh"
   echo ""
@@ -67,6 +65,41 @@ if [ -f "$INSTALL_DIR/state.json" ]; then
   EXISTING_KEY=$(grep -o '"api_key"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALL_DIR/state.json" 2>/dev/null | head -1 | sed 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 fi
 
+# Register key from server (or re-use existing)
+INSTALLER_TOKEN="__INSTALLER_TOKEN__"
+HOSTNAME_HASH=$(hostname 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || hostname 2>/dev/null | shasum -a 256 2>/dev/null | cut -d' ' -f1 || echo "unknown")
+OS_TYPE=$(uname -s 2>/dev/null || echo "unknown")
+ARCH_TYPE=$(uname -m 2>/dev/null || echo "unknown")
+
+request_key() {
+  local RESP
+  RESP=$(curl -s -w "\n%{http_code}" -X POST "$PROXY_URL/api/gimme-a-key" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: fixmyclawrouter-installer/$VERSION" \
+    -H "X-Installer-Token: $INSTALLER_TOKEN" \
+    -d "{\"hostname_hash\":\"$HOSTNAME_HASH\",\"os\":\"$OS_TYPE\",\"arch\":\"$ARCH_TYPE\",\"installer_version\":\"$VERSION\"}" \
+    2>/dev/null)
+  local HTTP_CODE=$(echo "$RESP" | tail -1)
+  local BODY=$(echo "$RESP" | sed '$d')
+
+  if [ "$HTTP_CODE" = "201" ]; then
+    # Extract api_key from JSON response
+    local KEY=""
+    if command -v jq &>/dev/null; then
+      KEY=$(echo "$BODY" | jq -r '.api_key' 2>/dev/null)
+    elif command -v python3 &>/dev/null; then
+      KEY=$(echo "$BODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('api_key',''))" 2>/dev/null)
+    else
+      KEY=$(echo "$BODY" | grep -o '"api_key"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    fi
+    if [ -n "$KEY" ] && [ "$KEY" != "null" ]; then
+      echo "$KEY"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 if [ -n "$EXISTING_KEY" ]; then
   echo ""
   echo "  ⚠️  FixMyClawRouter is already installed!"
@@ -76,8 +109,13 @@ if [ -n "$EXISTING_KEY" ]; then
     printf "  Generate a new key? (y/N): "
     read -r REGEN
     if [ "$REGEN" = "y" ] || [ "$REGEN" = "Y" ]; then
-      API_KEY="fcr-live-$(openssl rand -hex 16 2>/dev/null || cat /dev/urandom | tr -dc 'a-f0-9' | head -c 32)"
-      echo "  🔑 New key: $API_KEY"
+      API_KEY=$(request_key)
+      if [ -n "$API_KEY" ]; then
+        echo "  🔑 New key: $API_KEY"
+      else
+        echo "  ❌ Could not register a new key. Keeping existing."
+        API_KEY="$EXISTING_KEY"
+      fi
     else
       API_KEY="$EXISTING_KEY"
       echo "  🔑 Keeping existing key"
@@ -87,23 +125,19 @@ if [ -n "$EXISTING_KEY" ]; then
     echo "  🔑 Re-using existing key (non-interactive)"
   fi
 else
-  API_KEY="fcr-live-$(openssl rand -hex 16 2>/dev/null || cat /dev/urandom | tr -dc 'a-f0-9' | head -c 32)"
-  echo "  🔑 Your key: $API_KEY"
+  echo "  🔑 Registering API key..."
+  API_KEY=$(request_key)
+  if [ -n "$API_KEY" ]; then
+    echo "  🔑 Your key: $API_KEY"
+  else
+    echo ""
+    echo "  ❌ Could not reach $PROXY_URL to register a key."
+    echo "  Visit https://fixmyclawrouter.com to register manually."
+    exit 1
+  fi
 fi
 
-# Stop OpenClaw before editing config
-echo ""
-echo "  🛑 Stopping OpenClaw..."
-if command -v openclaw &>/dev/null; then
-  openclaw gateway stop 2>/dev/null && echo "  ✅ OpenClaw stopped." || echo "  ⚠️  Could not stop OpenClaw (may not be running)."
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
-  docker stop openclaw 2>/dev/null && echo "  ✅ OpenClaw container stopped." || echo "  ⚠️  Could not stop container."
-else
-  echo "  ℹ️  OpenClaw not detected as running."
-fi
-echo ""
-
-# Backup openclaw.json with timestamp
+# Backup openclaw.json with timestamp (before touching anything)
 BACKUP_TS=$(date -u +%Y%m%d_%H%M%S)
 BACKUP="${CONFIG}.before-fixmyclawrouter.${BACKUP_TS}"
 cp "$CONFIG" "$BACKUP"
@@ -243,32 +277,34 @@ fs.writeFileSync('$INSTALL_DIR/state.json', JSON.stringify(s, null, 2));
 }
 update_state
 
-# Start OpenClaw with new config — it will regenerate agent models.json automatically
+# Print summary BEFORE bouncing the gateway (the bounce may kill our shell session)
 echo ""
-echo "  🔄 Starting OpenClaw..."
-if command -v openclaw &>/dev/null; then
-  openclaw gateway start 2>/dev/null && echo "  ✅ OpenClaw started!" || echo "  ⚠️  Could not start OpenClaw. Please start manually: openclaw gateway start"
-elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
-  docker start openclaw 2>/dev/null && echo "  ✅ OpenClaw container started!" || echo "  ⚠️  Could not start container. Please start manually."
-else
-  echo "  ⚠️  Please start OpenClaw to apply changes: openclaw gateway start"
-fi
+echo "  ╔══════════════════════════════════════════════════════╗"
+echo "  ║  ✅ FixMyClawRouter installed! You're good to go.  ║"
+echo "  ║                                                    ║"
+echo "  ║  Your OpenClaw now routes through our smart        ║"
+echo "  ║  proxy. Simple stuff → free models. Complex        ║"
+echo "  ║  stuff → best available.                           ║"
+echo "  ║                                                    ║"
+echo "  ║  🔑 Your key: $API_KEY"
+echo "  ║                                                    ║"
+echo "  ║  ⚡ Claim your key for better performance:         ║"
+echo "  ║  $PROXY_URL/claim?key=$API_KEY"
+echo "  ║                                                    ║"
+echo "  ║  Claiming verifies your email and upgrades you     ║"
+echo "  ║  from anonymous to free tier — faster responses,   ║"
+echo "  ║  higher limits, and a dashboard to manage it all.  ║"
+echo "  ║                                                    ║"
+echo "  ║  Don't like it? No hard feelings:                  ║"
+echo "  ║  curl -fsSL $PROXY_URL/nah-i-didnt-like-it.sh | bash"
+echo "  ║                                                    ║"
+echo "  ╚══════════════════════════════════════════════════════╝"
+echo ""
+echo "  🔄 Bouncing OpenClaw gateway to load new config..."
+echo "     (your shell session may disconnect — that's normal)"
 echo ""
 
-echo "  ╔══════════════════════════════════════════════════╗"
-echo "  ║  ✅ FixMyClawRouter installed!                   ║"
-echo "  ║                                                  ║"
-echo "  ║  Your OpenClaw now routes through our smart      ║"
-echo "  ║  proxy. Simple stuff → free models. Complex      ║"
-echo "  ║  stuff → best available.                         ║"
-echo "  ║                                                  ║"
-echo "  ║  📊 Claim your dashboard:                        ║"
-echo "  ║  $PROXY_URL/claim?key=$API_KEY"
-echo "  ║                                                  ║"
-echo "  ║  🔑 Your key: $API_KEY"
-echo "  ║                                                  ║"
-echo "  ║  Don't like it? No hard feelings:                ║"
-echo "  ║  curl -fsSL $PROXY_URL/nah-i-didnt-like-it.sh | bash"
-echo "  ║                                                  ║"
-echo "  ╚══════════════════════════════════════════════════╝"
-echo ""
+# Bounce gateway: stop saves state, SIGHUP tells the process to reload.
+# Works on Docker (process manager restarts it) and Mac Mini (process reloads).
+# Background subshell so script exits cleanly even if it disrupts the session.
+(openclaw gateway stop 2>/dev/null || true; sleep 1; PIDS=$(pgrep -f "node.*gateway" 2>/dev/null || echo ""); [ -n "$PIDS" ] && kill -HUP $PIDS 2>/dev/null; true) &
