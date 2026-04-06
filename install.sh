@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROXY_URL="${PROXY_URL:-https://fixmyclawrouter.com}"
-VERSION="2.4.0"
+VERSION="2.5.0"
 
 echo ""
 echo "  🔧 FixMyClawRouter — Smart LLM Router for OpenClaw"
@@ -64,7 +64,6 @@ INSTALL_DIR="$(dirname "$CONFIG")/.fixmyclawrouter"
 mkdir -p "$INSTALL_DIR"
 EXISTING_KEY=""
 if [ -f "$INSTALL_DIR/state.json" ]; then
-  # Try to extract existing key
   EXISTING_KEY=$(grep -o '"api_key"[[:space:]]*:[[:space:]]*"[^"]*"' "$INSTALL_DIR/state.json" 2>/dev/null | head -1 | sed 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 fi
 
@@ -92,13 +91,25 @@ else
   echo "  🔑 Your key: $API_KEY"
 fi
 
-# Save pre-install hash + backup
+# Stop OpenClaw before editing config
+echo ""
+echo "  🛑 Stopping OpenClaw..."
+if command -v openclaw &>/dev/null; then
+  openclaw gateway stop 2>/dev/null && echo "  ✅ OpenClaw stopped." || echo "  ⚠️  Could not stop OpenClaw (may not be running)."
+elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
+  docker stop openclaw 2>/dev/null && echo "  ✅ OpenClaw container stopped." || echo "  ⚠️  Could not stop container."
+else
+  echo "  ℹ️  OpenClaw not detected as running."
+fi
+echo ""
+
+# Backup openclaw.json with timestamp
+BACKUP_TS=$(date -u +%Y%m%d_%H%M%S)
+BACKUP="${CONFIG}.before-fixmyclawrouter.${BACKUP_TS}"
+cp "$CONFIG" "$BACKUP"
+
 PRE_HASH=$(sha256sum "$CONFIG" 2>/dev/null || shasum -a 256 "$CONFIG" 2>/dev/null || echo "unknown")
 PRE_HASH=$(echo "$PRE_HASH" | awk '{print $1}')
-
-# Backup
-BACKUP="${CONFIG}.before-fixmyclawrouter"
-cp "$CONFIG" "$BACKUP"
 
 # Save install state
 cat > "$INSTALL_DIR/state.json" << EOFSTATE
@@ -120,13 +131,11 @@ echo ""
 update_config() {
   local url="$PROXY_URL/v1"
   local key="$API_KEY"
-  
+
   if command -v jq &>/dev/null; then
     TMPFILE=$(mktemp)
     jq --arg url "$url" --arg key "$key" '
-      # Set mode to replace so only our provider is used
       .models.mode = "replace" |
-      # Add our provider
       .models.providers["smart-proxy"] = {
         "baseUrl": $url,
         "apiKey": $key,
@@ -135,10 +144,8 @@ update_config() {
           {"id": "auto", "name": "Smart Router (auto)", "reasoning": true, "input": ["text"], "maxTokens": 128000}
         ]
       } |
-      # Set as primary model in defaults
       .agents.defaults.model.primary = "smart-proxy/auto" |
       .agents.defaults.model.fallbacks = ["smart-proxy/auto"] |
-      # Override per-agent model in agents.list (e.g. main agent)
       if .agents.list then
         .agents.list = [.agents.list[] |
           if .id == "main" then .model = "smart-proxy/auto" else . end
@@ -209,66 +216,6 @@ else
   exit 1
 fi
 
-# Update any agent models.json files that contain our API key
-# OpenClaw caches model config in agents/*/agent/models.json
-# We backup + hash each one just like we do for openclaw.json
-OPENCLAW_DIR="$(dirname "$CONFIG")"
-MODELS_FILES_JSON="[]"
-find "$OPENCLAW_DIR" -path "*/agent/models.json" -type f 2>/dev/null | while read -r MODELS_FILE; do
-  if grep -q "smart-proxy\|fixmyclawrouter\|fcr-live-" "$MODELS_FILE" 2>/dev/null; then
-    # Backup with hash
-    MODELS_BACKUP="${MODELS_FILE}.before-fixmyclawrouter"
-    cp "$MODELS_FILE" "$MODELS_BACKUP"
-    MODELS_PRE_HASH=$(sha256sum "$MODELS_FILE" 2>/dev/null || shasum -a 256 "$MODELS_FILE" 2>/dev/null || echo "unknown")
-    MODELS_PRE_HASH=$(echo "$MODELS_PRE_HASH" | awk '{print $1}')
-    echo "  📋 Backup: $MODELS_BACKUP"
-
-    # Update the API key
-    if command -v jq &>/dev/null; then
-      TMPMOD=$(mktemp)
-      jq --arg key "$API_KEY" '
-        if .providers then
-          .providers = (.providers | to_entries | map(
-            if .value.apiKey and (.value.apiKey | test("^fcr-live-")) then .value.apiKey = $key else . end
-          ) | from_entries)
-        else . end
-      ' "$MODELS_FILE" > "$TMPMOD" && mv "$TMPMOD" "$MODELS_FILE"
-    elif command -v python3 &>/dev/null; then
-      python3 -c "
-import json
-with open('$MODELS_FILE') as f: cfg = json.load(f)
-for p in cfg.get('providers', {}).values():
-    if isinstance(p, dict) and p.get('apiKey', '').startswith('fcr-live-'):
-        p['apiKey'] = '$API_KEY'
-with open('$MODELS_FILE', 'w') as f: json.dump(cfg, f, indent=2)
-"
-    elif command -v node &>/dev/null; then
-      node -e "
-const fs = require('fs');
-const cfg = JSON.parse(fs.readFileSync('$MODELS_FILE', 'utf8'));
-for (const p of Object.values(cfg.providers || {})) {
-  if (p.apiKey && p.apiKey.startsWith('fcr-live-')) p.apiKey = '$API_KEY';
-}
-fs.writeFileSync('$MODELS_FILE', JSON.stringify(cfg, null, 2));
-"
-    fi
-
-    MODELS_POST_HASH=$(sha256sum "$MODELS_FILE" 2>/dev/null || shasum -a 256 "$MODELS_FILE" 2>/dev/null || echo "unknown")
-    MODELS_POST_HASH=$(echo "$MODELS_POST_HASH" | awk '{print $1}')
-
-    # Save models.json state to its own state file alongside the backup
-    cat > "${MODELS_FILE}.fixmyclawrouter-state" << EOFMSTATE
-{
-  "file": "$MODELS_FILE",
-  "backup": "$MODELS_BACKUP",
-  "pre_hash": "$MODELS_PRE_HASH",
-  "post_hash": "$MODELS_POST_HASH"
-}
-EOFMSTATE
-    echo "  ✅ Updated: $MODELS_FILE"
-  fi
-done
-
 # Post-install hash
 POST_HASH=$(sha256sum "$CONFIG" 2>/dev/null || shasum -a 256 "$CONFIG" 2>/dev/null || echo "unknown")
 POST_HASH=$(echo "$POST_HASH" | awk '{print $1}')
@@ -296,15 +243,15 @@ fs.writeFileSync('$INSTALL_DIR/state.json', JSON.stringify(s, null, 2));
 }
 update_state
 
+# Start OpenClaw with new config — it will regenerate agent models.json automatically
 echo ""
-# Restart OpenClaw to pick up config changes
-echo "  🔄 Restarting OpenClaw..."
+echo "  🔄 Starting OpenClaw..."
 if command -v openclaw &>/dev/null; then
-  openclaw gateway restart 2>/dev/null && echo "  ✅ OpenClaw restarted!" || echo "  ⚠️  Could not restart OpenClaw. Please restart manually: openclaw gateway restart"
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
-  docker restart openclaw 2>/dev/null && echo "  ✅ OpenClaw container restarted!" || echo "  ⚠️  Could not restart container. Please restart manually."
+  openclaw gateway start 2>/dev/null && echo "  ✅ OpenClaw started!" || echo "  ⚠️  Could not start OpenClaw. Please start manually: openclaw gateway start"
+elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q openclaw; then
+  docker start openclaw 2>/dev/null && echo "  ✅ OpenClaw container started!" || echo "  ⚠️  Could not start container. Please start manually."
 else
-  echo "  ⚠️  Please restart OpenClaw to apply changes: openclaw gateway restart"
+  echo "  ⚠️  Please start OpenClaw to apply changes: openclaw gateway start"
 fi
 echo ""
 
