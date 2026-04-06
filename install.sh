@@ -99,7 +99,7 @@ update_config() {
     jq --arg url "$url" --arg key "$key" '
       # Set mode to replace so only our provider is used
       .models.mode = "replace" |
-      # Keep existing providers but add ours
+      # Add our provider
       .models.providers["smart-proxy"] = {
         "baseUrl": $url,
         "apiKey": $key,
@@ -108,17 +108,22 @@ update_config() {
           {"id": "auto", "name": "Smart Router (auto)", "reasoning": true, "input": ["text"], "maxTokens": 128000}
         ]
       } |
-      # Set as primary model
+      # Set as primary model in defaults
       .agents.defaults.model.primary = "smart-proxy/auto" |
-      # Clear fallbacks so it doesnt revert to old models
-      .agents.defaults.model.fallbacks = ["smart-proxy/auto"]
+      .agents.defaults.model.fallbacks = ["smart-proxy/auto"] |
+      # Override per-agent model in agents.list (e.g. main agent)
+      if .agents.list then
+        .agents.list = [.agents.list[] |
+          if .id == "main" then .model = "smart-proxy/auto" else . end
+        ]
+      else . end
     ' "$CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$CONFIG"
     return 0
   fi
 
   if command -v python3 &>/dev/null; then
     python3 -c "
-import json, sys
+import json
 with open('$CONFIG') as f: cfg = json.load(f)
 cfg.setdefault('models', {})['mode'] = 'replace'
 cfg['models'].setdefault('providers', {})['smart-proxy'] = {
@@ -127,6 +132,9 @@ cfg['models'].setdefault('providers', {})['smart-proxy'] = {
 }
 cfg.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'smart-proxy/auto'
 cfg['agents']['defaults']['model']['fallbacks'] = ['smart-proxy/auto']
+for agent in cfg.get('agents', {}).get('list', []):
+    if agent.get('id') == 'main':
+        agent['model'] = 'smart-proxy/auto'
 with open('$CONFIG', 'w') as f: json.dump(cfg, f, indent=2)
 " && return 0
   fi
@@ -147,6 +155,11 @@ if (!cfg.agents.defaults) cfg.agents.defaults = {};
 if (!cfg.agents.defaults.model) cfg.agents.defaults.model = {};
 cfg.agents.defaults.model.primary = 'smart-proxy/auto';
 cfg.agents.defaults.model.fallbacks = ['smart-proxy/auto'];
+if (cfg.agents.list) {
+  for (const agent of cfg.agents.list) {
+    if (agent.id === 'main') agent.model = 'smart-proxy/auto';
+  }
+}
 fs.writeFileSync('$CONFIG', JSON.stringify(cfg, null, 2));
 " && return 0
   fi
