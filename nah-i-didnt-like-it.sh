@@ -106,6 +106,35 @@ else
   echo "  ✅ Reverted to pre-install backup."
 fi
 
+# Restore agent models.json files from backups
+OPENCLAW_DIR="$(dirname "$CONFIG")"
+find "$OPENCLAW_DIR" -name "*.fixmyclawrouter-state" -type f 2>/dev/null | while read -r MSTATE_FILE; do
+  MFILE=$(jq -r '.file' "$MSTATE_FILE" 2>/dev/null)
+  MBACKUP=$(jq -r '.backup' "$MSTATE_FILE" 2>/dev/null)
+  MPRE_HASH=$(jq -r '.pre_hash' "$MSTATE_FILE" 2>/dev/null)
+  MPOST_HASH=$(jq -r '.post_hash' "$MSTATE_FILE" 2>/dev/null)
+
+  if [ -z "$MFILE" ] || [ ! -f "$MFILE" ]; then
+    continue
+  fi
+
+  if [ -n "$MBACKUP" ] && [ -f "$MBACKUP" ]; then
+    # Check if the file has been modified since we touched it
+    MCURRENT_HASH=$(sha256sum "$MFILE" 2>/dev/null || shasum -a 256 "$MFILE" 2>/dev/null || echo "unknown")
+    MCURRENT_HASH=$(echo "$MCURRENT_HASH" | awk '{print $1}')
+
+    if [ "$MCURRENT_HASH" = "$MPOST_HASH" ] || [ "$MPOST_HASH" = "unknown" ]; then
+      # Unchanged since install — safe to restore backup
+      cp "$MBACKUP" "$MFILE"
+      echo "  ✅ Restored: $MFILE"
+    else
+      echo "  ⚠️  $MFILE was modified since install — skipping (manual cleanup needed)"
+    fi
+    rm -f "$MBACKUP"
+  fi
+  rm -f "$MSTATE_FILE"
+done
+
 # Clean up state
 rm -rf "$(dirname "$STATE")"
 echo ""

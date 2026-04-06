@@ -8,16 +8,15 @@ On April 4, 2026, Anthropic started metering third-party tool usage on Claude Ma
 
 Instead of sending everything to one expensive provider, FixMyClawRouter intelligently routes each request to the best available LLM:
 
-- **Simple messages** → fast free models (Groq, Cerebras, Mistral)
-- **Code generation** → specialized code models (DeepSeek, Grok)
-- **Complex reasoning** → premium models (Claude, GPT-4)
+- **Simple messages** → fast free models
+- **Code generation** → specialized code models
+- **Complex reasoning** → premium models
 - **Tool calling** → only models that support it (automatically detected)
 
 ## Free Tier — Yes, Actually Free
 
-We share our AWS GPU fleet with the community. Free users get:
-- Access to 8+ free LLM providers
-- Self-hosted models on our GPU instances
+We share our infrastructure with the community. Free users get:
+- Access to our vLLM models and free-tier providers
 - Tool calling support (required for OpenClaw agents)
 - Slower response times (2s throttle) but **it works**
 
@@ -30,10 +29,12 @@ curl -fsSL https://fixmyclawrouter.com/install.sh | bash
 ```
 
 That's it. Your OpenClaw config is automatically updated. The script:
-1. Generates a unique API key
-2. Backs up your current `openclaw.json`
+1. Generates a unique API key (or re-uses your existing one on re-install)
+2. Backs up your `openclaw.json` and any agent `models.json` files
 3. Updates the API endpoint to route through FixMyClawRouter
-4. Saves a config hash so uninstall knows if you changed things
+4. Saves config hashes so uninstall knows if you changed things
+
+Re-running the installer is safe — it detects an existing installation and lets you keep your current key or generate a new one.
 
 ## Uninstall
 
@@ -45,8 +46,10 @@ curl -fsSL https://fixmyclawrouter.com/nah-i-didnt-like-it.sh | bash
 
 It detects what changed since install and offers:
 - **Surgical restore** — only revert the proxy settings
-- **Full restore** — restore your entire backup
+- **Full restore** — restore your entire backup (openclaw.json + models.json)
 - **Manual** — show you what to change
+
+Agent `models.json` files are only restored if they haven't been modified since install — we won't risk breaking your config.
 
 ## How It Works
 
@@ -57,14 +60,10 @@ Your OpenClaw → FixMyClawRouter Proxy → Best Available LLM
               analyzes your prompt
                      ↓
          Routes to optimal provider:
-         ├── Groq (free, fast)
-         ├── Cerebras (free, ultra-fast)
-         ├── Mistral (free, tool calling)
-         ├── Cohere (free, 128K context)
-         ├── Our GPU Fleet (free, slower)
-         ├── DeepSeek (cheap, great for code)
-         ├── Grok (medium, tool calling)
-         └── Claude/GPT (premium, BYOK)
+         ├── Free tier (simple queries)
+         ├── Our vLLM fleet (self-hosted)
+         ├── Mid-range models (code, analysis)
+         └── Premium models (reasoning, BYOK)
 ```
 
 ## Bring Your Own Keys (BYOK)
