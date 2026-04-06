@@ -76,14 +76,21 @@ ARCH_TYPE=$(uname -m 2>/dev/null || echo "unknown")
 REGISTER_ERROR=""
 request_key() {
   local RESP
-  RESP=$(curl -s -w "\n%{http_code}" -X POST "$PROXY_URL/api/gimme-a-key" \
+  RESP=$(curl -s -w "\n%{http_code}" --max-time 30 "$PROXY_URL/api/gimme-a-key" \
     -H "Content-Type: application/json" \
     -H "User-Agent: fixmyclawrouter-installer/$VERSION" \
     -H "X-Installer-Token: $INSTALLER_TOKEN" \
     -d "{\"hostname_hash\":\"$HOSTNAME_HASH\",\"os\":\"$OS_TYPE\",\"arch\":\"$ARCH_TYPE\",\"installer_version\":\"$VERSION\"}" \
-    2>/dev/null)
+    2>&1)
+  local CURL_EXIT=$?
   local HTTP_CODE=$(echo "$RESP" | tail -1)
   local BODY=$(echo "$RESP" | sed '$d')
+
+  # Debug: show what we got if it failed
+  if [ "$HTTP_CODE" != "201" ] && [ "$CURL_EXIT" -ne 0 ]; then
+    REGISTER_ERROR="curl exit=$CURL_EXIT, http=$HTTP_CODE"
+    return 1
+  fi
 
   if [ "$HTTP_CODE" = "201" ]; then
     local KEY=""
@@ -144,6 +151,7 @@ if [ -n "$EXISTING_KEY" ]; then
   fi
 else
   echo "  🔑 Registering API key..."
+  echo "  (token: ${INSTALLER_TOKEN:0:12}...)" >&2
   API_KEY=$(request_key) || true
   if [ -n "$API_KEY" ]; then
     echo "  🔑 Your key: $API_KEY"
