@@ -15,7 +15,7 @@ Instead of sending everything to one expensive provider, FixMyClawRouter intelli
 
 ## Free Tier — Yes, Actually Free
 
-We share our infrastructure with the community. Free users get:
+We share our AWS-hosted GPU fleet with the community. Free users get:
 - Access to our vLLM models and free-tier providers
 - Tool calling support (required for OpenClaw agents)
 - Slower response times (2s throttle) but **it works**
