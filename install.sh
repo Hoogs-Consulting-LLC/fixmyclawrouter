@@ -73,6 +73,7 @@ HOSTNAME_HASH=$(hostname 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || 
 OS_TYPE=$(uname -s 2>/dev/null || echo "unknown")
 ARCH_TYPE=$(uname -m 2>/dev/null || echo "unknown")
 
+REGISTER_ERROR=""
 request_key() {
   local RESP
   RESP=$(curl -s -w "\n%{http_code}" -X POST "$PROXY_URL/api/gimme-a-key" \
@@ -85,7 +86,6 @@ request_key() {
   local BODY=$(echo "$RESP" | sed '$d')
 
   if [ "$HTTP_CODE" = "201" ]; then
-    # Extract api_key from JSON response
     local KEY=""
     if command -v jq &>/dev/null; then
       KEY=$(echo "$BODY" | jq -r '.api_key' 2>/dev/null)
@@ -98,6 +98,21 @@ request_key() {
       echo "$KEY"
       return 0
     fi
+  fi
+
+  # Extract error message from response for display
+  if [ -n "$BODY" ]; then
+    local ERR_MSG=""
+    if command -v jq &>/dev/null; then
+      ERR_MSG=$(echo "$BODY" | jq -r '.error // empty' 2>/dev/null)
+    elif command -v python3 &>/dev/null; then
+      ERR_MSG=$(echo "$BODY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('error',''))" 2>/dev/null)
+    else
+      ERR_MSG=$(echo "$BODY" | grep -o '"error"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    fi
+    REGISTER_ERROR="${ERR_MSG:-HTTP $HTTP_CODE}"
+  else
+    REGISTER_ERROR="Could not reach $PROXY_URL"
   fi
   return 1
 }
@@ -115,7 +130,8 @@ if [ -n "$EXISTING_KEY" ]; then
       if [ -n "$API_KEY" ]; then
         echo "  🔑 New key: $API_KEY"
       else
-        echo "  ❌ Could not register a new key. Keeping existing."
+        echo "  ❌ Could not register a new key: $REGISTER_ERROR"
+        echo "  Keeping existing key."
         API_KEY="$EXISTING_KEY"
       fi
     else
@@ -133,8 +149,14 @@ else
     echo "  🔑 Your key: $API_KEY"
   else
     echo ""
-    echo "  ❌ Could not reach $PROXY_URL to register a key."
-    echo "  Visit https://fixmyclawrouter.com to register manually."
+    echo "  ❌ Key registration failed: $REGISTER_ERROR"
+    echo ""
+    echo "  This can happen if:"
+    echo "    - Too many keys registered from this IP (try again in 24h)"
+    echo "    - The server is temporarily busy"
+    echo "    - The install script download expired (re-run the curl command)"
+    echo ""
+    echo "  Or register manually at: https://fixmyclawrouter.com"
     exit 1
   fi
 fi
