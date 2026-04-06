@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROXY_URL="${PROXY_URL:-https://fixmyclawrouter.com}"
-VERSION="1.0.0"
+VERSION="2.4.0"
 
 echo ""
 echo "  🔧 FixMyClawRouter — Smart LLM Router for OpenClaw"
