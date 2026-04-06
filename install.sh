@@ -67,7 +67,9 @@ fi
 
 # Register key from server (or re-use existing)
 INSTALLER_TOKEN="__INSTALLER_TOKEN__"
-HOSTNAME_HASH=$(hostname 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || hostname 2>/dev/null | shasum -a 256 2>/dev/null | cut -d' ' -f1 || echo "unknown")
+HOSTNAME_HASH=$(hostname 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || true)
+[ -z "$HOSTNAME_HASH" ] && HOSTNAME_HASH=$(hostname 2>/dev/null | shasum -a 256 2>/dev/null | cut -d' ' -f1 || true)
+[ -z "$HOSTNAME_HASH" ] && HOSTNAME_HASH="unknown"
 OS_TYPE=$(uname -s 2>/dev/null || echo "unknown")
 ARCH_TYPE=$(uname -m 2>/dev/null || echo "unknown")
 
@@ -109,7 +111,7 @@ if [ -n "$EXISTING_KEY" ]; then
     printf "  Generate a new key? (y/N): "
     read -r REGEN
     if [ "$REGEN" = "y" ] || [ "$REGEN" = "Y" ]; then
-      API_KEY=$(request_key)
+      API_KEY=$(request_key) || true
       if [ -n "$API_KEY" ]; then
         echo "  🔑 New key: $API_KEY"
       else
@@ -126,7 +128,7 @@ if [ -n "$EXISTING_KEY" ]; then
   fi
 else
   echo "  🔑 Registering API key..."
-  API_KEY=$(request_key)
+  API_KEY=$(request_key) || true
   if [ -n "$API_KEY" ]; then
     echo "  🔑 Your key: $API_KEY"
   else
