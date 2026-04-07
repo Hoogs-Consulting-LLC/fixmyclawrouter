@@ -89,9 +89,9 @@ Visit [fixmyclawrouter.com/claim](https://fixmyclawrouter.com/claim)
 | Plan | Price | What You Get |
 |------|-------|-------------|
 | **Free** | $0 | 500 req/day, free models, 2s delay, BYOK for premium |
-| **Pro** | $49/mo | Unlimited, all models, zero delay, ~$40 API credits |
-| **Team** | $99/mo | 5 seats, ~$80 credits, priority routing |
-| **Enterprise** | $199/mo | Dedicated throughput, SLA, onboarding |
+| **Pro** | $49/mo | Unlimited, all models, zero delay, priority routing |
+| **Team** | $99/mo | 5 seats, shared key, priority routing |
+| **Enterprise** | $199/mo | 10 seats, dedicated throughput, SLA, onboarding |
 
 ## Why Not Just Use the Free APIs Directly?
 
